@@ -1,0 +1,665 @@
+RePlate Backend Implementation
+
+Below is a complete, modular Node.js/Express backend for RePlate. It follows a clean architecture with separate configuration, models, controllers, routes, and middleware. Each file is explained briefly and shown in full.
+
+Project Structure
+replate-backend/
+├── server.js
+├── config/
+│   └── db.js
+├── controllers/
+│   ├── authController.js
+│   ├── userController.js
+│   ├── foodController.js
+│   ├── aiController.js
+│   └── statsController.js
+├── middleware/
+│   ├── authMiddleware.js
+│   └── roleMiddleware.js
+├── models/
+│   ├── userModel.js
+│   ├── foodModel.js
+│   └── claimModel.js
+├── routes/
+│   ├── authRoutes.js
+│   ├── userRoutes.js
+│   ├── foodRoutes.js
+│   ├── aiRoutes.js
+│   └── statsRoutes.js
+├── services/
+│   └── matcher.js
+├── utils/
+│   └── tokenUtils.js
+└── .env.example
+
+server.js (Application Entry Point)
+const express = require('express');
+const cookieParser = require('cookie-parser');
+const dotenv = require('dotenv');
+const connectDB = require('./config/db');
+const authRoutes = require('./routes/authRoutes');
+const userRoutes = require('./routes/userRoutes');
+const foodRoutes = require('./routes/foodRoutes');
+const aiRoutes = require('./routes/aiRoutes');
+const statsRoutes = require('./routes/statsRoutes');
+
+dotenv.config();
+connectDB();
+
+const app = express();
+app.use(express.json());
+app.use(cookieParser());
+
+// Mount routes
+app.use('/auth', authRoutes);
+app.use('/user', userRoutes);
+app.use('/food', foodRoutes);
+app.use('/ai', aiRoutes);
+app.use('/stats', statsRoutes);
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: 'Server Error' });
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+
+This file sets up Express, connects to MongoDB, applies middleware (JSON parser, cookie parser), and mounts all route groups. It also includes a simple error handler.
+
+config/db.js (Database Configuration)
+const mongoose = require('mongoose');
+
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+    console.log('MongoDB connected');
+  } catch (err) {
+    console.error('MongoDB connection failed:', err.message);
+    process.exit(1);
+  }
+};
+
+module.exports = connectDB;
+
+
+This module connects to MongoDB using the MONGO_URI from environment variables.
+
+Models
+models/userModel.js
+const mongoose = require('mongoose');
+
+const userSchema = new mongoose.Schema({
+  email: { type: String, unique: true, required: true },
+  password: { type: String },
+  googleId: { type: String },
+  roles: { type: [String], default: ['donor', 'recipient'] },
+  activeRole: { type: String, enum: ['donor', 'recipient'], default: 'recipient' },
+  location: {
+    type: { type: String, enum: ['Point'], default: 'Point' },
+    coordinates: { type: [Number] }
+  },
+  preferences: { type: [String], default: [] }
+}, { timestamps: true });
+
+// Geospatial index for location
+userSchema.index({ location: '2dsphere' });
+
+// Hide sensitive fields when converting to JSON
+userSchema.set('toJSON', {
+  transform: (doc, ret) => {
+    delete ret.password;
+    delete ret.googleId;
+    return ret;
+  }
+});
+
+module.exports = mongoose.model('User', userSchema);
+
+
+Defines the User schema with fields for email, password, Google ID, roles, active role, geolocation, and preferences. It also creates a 2dsphere index on location for geo-queries. Sensitive fields (password, googleId) are removed when converting to JSON.
+
+models/foodModel.js
+const mongoose = require('mongoose');
+
+const foodSchema = new mongoose.Schema({
+  donor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  name: { type: String, required: true },
+  type: { type: String },
+  quantity: { type: Number, required: true },
+  expiry: { type: Date },
+  location: {
+    type: { type: String, enum: ['Point'], default: 'Point' },
+    coordinates: { type: [Number], required: true } // [longitude, latitude]
+  },
+  status: { type: String, enum: ['available', 'claimed'], default: 'available' },
+  claimedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+}, { timestamps: true });
+
+// Geospatial index for location
+foodSchema.index({ location: '2dsphere' });
+
+module.exports = mongoose.model('FoodPost', foodSchema);
+
+
+Defines the FoodPost schema with donor reference, food details, location (GeoJSON point), status, and claimedBy reference. A 2dsphere index is added for geo-queries.
+
+models/claimModel.js
+const mongoose = require('mongoose');
+
+const claimSchema = new mongoose.Schema({
+  recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  food: { type: mongoose.Schema.Types.ObjectId, ref: 'FoodPost', required: true },
+  status: { type: String, default: 'claimed' }
+}, { timestamps: true });
+
+module.exports = mongoose.model('Claim', claimSchema);
+
+
+Stores claims when a recipient claims a food post.
+
+Middleware
+middleware/authMiddleware.js
+const jwt = require('jsonwebtoken');
+const User = require('../models/userModel');
+
+const authMiddleware = async (req, res, next) => {
+  try {
+    // Check for token in cookies or Authorization header
+    const token = req.cookies.token || 
+      (req.headers.authorization &&
+       req.headers.authorization.startsWith('Bearer') &&
+       req.headers.authorization.split(' ')[1]);
+    if (!token) {
+      return res.status(401).json({ message: 'Authentication token missing' });
+    }
+    // Verify token and attach user to request
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      return res.status(401).json({ message: 'User not found' });
+    }
+    req.user = user;
+    next();
+  } catch (err) {
+    console.error('Auth error:', err);
+    res.status(401).json({ message: 'Not authorized' });
+  }
+};
+
+module.exports = authMiddleware;
+
+
+Verifies the JWT (from an HTTP-only cookie or Authorization header) and attaches the authenticated user to req.user.
+
+middleware/roleMiddleware.js
+const roleMiddleware = (role) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ message: 'Not authorized' });
+    }
+    if (req.user.activeRole !== role) {
+      return res.status(403).json({ message: `Requires ${role} role` });
+    }
+    next();
+  };
+};
+
+module.exports = roleMiddleware;
+
+
+Checks that the authenticated user's activeRole matches the required role for the route (e.g. "donor" or "recipient").
+
+Controllers
+controllers/authController.js
+const bcrypt = require('bcrypt');
+const { OAuth2Client } = require('google-auth-library');
+const User = require('../models/userModel');
+const { generateToken } = require('../utils/tokenUtils');
+
+// Initialize Google OAuth2 client
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+exports.signup = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    // Basic validation
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+    // Hash password and create user
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({ email, password: hashedPassword });
+    // Generate JWT and set HTTP-only cookie
+    const token = generateToken(user);
+    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+    res.status(201).json({ user });
+  } catch (err) {
+    console.error('Signup error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+    // Find user and verify password
+    const user = await User.findOne({ email });
+    if (!user || !user.password) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+    // Generate JWT and set cookie
+    const token = generateToken(user);
+    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+    res.status(200).json({ user });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.google = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ message: 'ID token is required' });
+    }
+    // Verify Google ID token
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload();
+    const { sub: googleId, email } = payload;
+    if (!email) {
+      return res.status(400).json({ message: 'Google account has no email' });
+    }
+    // Find or create user
+    let user = await User.findOne({ email });
+    if (user) {
+      if (!user.googleId) {
+        user.googleId = googleId;
+        await user.save();
+      }
+    } else {
+      user = await User.create({ email, googleId });
+    }
+    // Generate JWT and set cookie
+    const token = generateToken(user);
+    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+    res.status(200).json({ user });
+  } catch (err) {
+    console.error('Google Auth error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
+Handles user signup (with bcrypt-hashed password), login, and Google OAuth login (verifying the ID token via google-auth-library). On success, it issues a JWT in an HTTP-only cookie and returns the user profile.
+
+controllers/userController.js
+exports.getMe = async (req, res) => {
+  try {
+    // Return user profile (password and googleId hidden via schema transform)
+    res.status(200).json({ user: req.user });
+  } catch (err) {
+    console.error('GetMe error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.switchRole = async (req, res) => {
+  try {
+    const user = req.user;
+    // Toggle active role between donor and recipient
+    if (user.activeRole === 'donor') {
+      user.activeRole = 'recipient';
+    } else {
+      user.activeRole = 'donor';
+    }
+    await user.save();
+    res.status(200).json({ message: `Active role switched to ${user.activeRole}`, user });
+  } catch (err) {
+    console.error('SwitchRole error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
+Provides endpoints for getting the authenticated user’s profile (GET /user/me) and toggling their active role (PATCH /user/switch-role).
+
+controllers/foodController.js
+const FoodPost = require('../models/foodModel');
+const Claim = require('../models/claimModel');
+const matcher = require('../services/matcher');
+
+exports.create = async (req, res) => {
+  try {
+    const { name, type, quantity, expiry, location } = req.body;
+    // Expect location as { lat, lon }
+    if (!name || !quantity || !location || typeof location.lat !== 'number' || typeof location.lon !== 'number') {
+      return res.status(400).json({ message: 'Name, quantity, and valid location (lat, lon) are required' });
+    }
+    // Create new food post
+    const foodPost = await FoodPost.create({
+      donor: req.user._id,
+      name,
+      type,
+      quantity,
+      expiry,
+      location: { type: 'Point', coordinates: [location.lon, location.lat] }
+    });
+    // AI matching to recommend recipients (top 3)
+    const recommendations = await matcher.recommend(foodPost);
+    res.status(201).json({ foodPost, recommendations });
+  } catch (err) {
+    console.error('Create FoodPost error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.nearby = async (req, res) => {
+  try {
+    // Ensure recipient has a location
+    if (!req.user.location || !req.user.location.coordinates || req.user.location.coordinates.length !== 2) {
+      return res.status(400).json({ message: 'User location is required to find nearby food' });
+    }
+    const [lon, lat] = req.user.location.coordinates;
+    const maxDistance = 10000; // 10 km
+    // Geospatial query for nearby available food posts
+    const nearbyFoods = await FoodPost.find({
+      status: 'available',
+      location: {
+        $near: {
+          $geometry: { type: 'Point', coordinates: [lon, lat] },
+          $maxDistance: maxDistance
+        }
+      }
+    }).limit(20);
+    res.status(200).json({ foods: nearbyFoods });
+  } catch (err) {
+    console.error('Nearby Food error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.claim = async (req, res) => {
+  try {
+    const foodId = req.params.id;
+    const food = await FoodPost.findById(foodId);
+    if (!food || food.status !== 'available') {
+      return res.status(400).json({ message: 'Food not available or already claimed' });
+    }
+    // Claim the food
+    food.status = 'claimed';
+    food.claimedBy = req.user._id;
+    await food.save();
+    // Record the claim
+    const claim = await Claim.create({ recipient: req.user._id, food: food._id });
+    res.status(200).json({ message: 'Food claimed successfully', food });
+  } catch (err) {
+    console.error('Claim Food error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.mine = async (req, res) => {
+  try {
+    // Get all food posts by this donor
+    const myFoods = await FoodPost.find({ donor: req.user._id });
+    res.status(200).json({ foods: myFoods });
+  } catch (err) {
+    console.error('Mine Food error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
+create: Donors post food with name, type, quantity, expiry, and location (lat, lon in body). After creation, it calls the AI matcher to return top 3 recipients.
+
+nearby: Recipients get nearby available food posts (within ~10km of their location).
+
+claim: Recipients claim a food post (only if available), which updates the post and creates a Claim record.
+
+mine: Donors retrieve all their own food posts.
+
+controllers/aiController.js
+const matcher = require('../services/matcher');
+const FoodPost = require('../models/foodModel');
+
+exports.recommend = async (req, res) => {
+  try {
+    const { foodId } = req.body;
+    if (!foodId) {
+      return res.status(400).json({ message: 'foodId is required' });
+    }
+    const food = await FoodPost.findById(foodId);
+    if (!food) {
+      return res.status(404).json({ message: 'Food post not found' });
+    }
+    const recommendations = await matcher.recommend(food);
+    res.status(200).json({ recommendations });
+  } catch (err) {
+    console.error('AI recommend error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
+An internal endpoint (POST /ai/recommend) that takes a foodId and returns top 3 recipient recommendations using the AI matching service.
+
+controllers/statsController.js
+const FoodPost = require('../models/foodModel');
+const User = require('../models/userModel');
+
+exports.overview = async (req, res) => {
+  try {
+    // Total meals saved (sum of claimed quantities)
+    const savedResult = await FoodPost.aggregate([
+      { $match: { status: 'claimed' } },
+      { $group: { _id: null, total: { $sum: '$quantity' } } }
+    ]);
+    const totalMealsSaved = savedResult[0] ? savedResult[0].total : 0;
+    // Active (available) food posts
+    const activePosts = await FoodPost.countDocuments({ status: 'available' });
+    // Number of users with each role
+    const donorCount = await User.countDocuments({ roles: 'donor' });
+    const recipientCount = await User.countDocuments({ roles: 'recipient' });
+    res.status(200).json({
+      totalMealsSaved,
+      activePosts,
+      donorCount,
+      recipientCount
+    });
+  } catch (err) {
+    console.error('Stats overview error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
+Returns overall statistics (GET /stats/overview): total meals saved (sum of claimed food quantities), number of active food posts, and counts of donors and recipients.
+
+Services
+services/matcher.js
+const User = require('../models/userModel');
+
+// Helper: Calculate distance between two coordinates (Haversine formula)
+function getDistanceFromLatLon(lat1, lon1, lat2, lon2) {
+  function toRad(value) {
+    return (value * Math.PI) / 180;
+  }
+  const R = 6371; // Earth radius in km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+// AI matching logic: score recipients for a given food post
+const recommend = async (foodPost) => {
+  // Extract food location and type
+  const [foodLon, foodLat] = foodPost.location.coordinates;
+  const foodType = foodPost.type;
+  // Find all potential recipients
+  const recipients = await User.find({ roles: 'recipient' });
+  const scored = [];
+  for (const rec of recipients) {
+    if (!rec.location || !rec.location.coordinates || rec.location.coordinates.length < 2) {
+      continue; // skip if no location
+    }
+    const [recLon, recLat] = rec.location.coordinates;
+    // Calculate distance in km
+    const distance = getDistanceFromLatLon(recLat, recLon, foodLat, foodLon);
+    // Check preference match
+    const preferenceMatch = rec.preferences && foodType && rec.preferences.includes(foodType);
+    // Basic scoring: lower is better
+    let score = distance;
+    if (preferenceMatch) {
+      score -= 5; // boost for preference match
+    }
+    scored.push({ user: rec, score, distance });
+  }
+  // Sort by score ascending
+  scored.sort((a, b) => a.score - b.score);
+  // Return top 3 recipients (with basic info)
+  return scored.slice(0, 3).map(item => ({
+    userId: item.user._id,
+    email: item.user.email,
+    distance: item.distance,
+    score: item.score
+  }));
+};
+
+module.exports = { recommend };
+
+
+A simple matching algorithm that scores recipients based on distance and preference match, then returns the top 3. It uses the Haversine formula for distance and subtracts a bonus if the recipient’s preferences include the food type.
+
+Routes
+routes/authRoutes.js
+const express = require('express');
+const router = express.Router();
+const authController = require('../controllers/authController');
+
+router.post('/signup', authController.signup);
+router.post('/login', authController.login);
+router.post('/google', authController.google);
+
+module.exports = router;
+
+
+Auth endpoints for signup, login, and Google OAuth.
+
+routes/userRoutes.js
+const express = require('express');
+const router = express.Router();
+const userController = require('../controllers/userController');
+const authMiddleware = require('../middleware/authMiddleware');
+
+router.get('/me', authMiddleware, userController.getMe);
+router.patch('/switch-role', authMiddleware, userController.switchRole);
+
+module.exports = router;
+
+
+User endpoints for fetching profile and switching active role (both require authentication).
+
+routes/foodRoutes.js
+const express = require('express');
+const router = express.Router();
+const foodController = require('../controllers/foodController');
+const authMiddleware = require('../middleware/authMiddleware');
+const roleMiddleware = require('../middleware/roleMiddleware');
+
+router.post('/create', authMiddleware, roleMiddleware('donor'), foodController.create);
+router.get('/nearby', authMiddleware, roleMiddleware('recipient'), foodController.nearby);
+router.patch('/claim/:id', authMiddleware, roleMiddleware('recipient'), foodController.claim);
+router.get('/mine', authMiddleware, roleMiddleware('donor'), foodController.mine);
+
+module.exports = router;
+
+
+Food-related endpoints. Access is role-protected:
+
+/create and /mine only for active donors.
+
+/nearby and /claim/:id only for active recipients.
+
+routes/aiRoutes.js
+const express = require('express');
+const router = express.Router();
+const aiController = require('../controllers/aiController');
+
+router.post('/recommend', aiController.recommend);
+
+module.exports = router;
+
+
+Internal endpoint for triggering recipient recommendations.
+
+routes/statsRoutes.js
+const express = require('express');
+const router = express.Router();
+const statsController = require('../controllers/statsController');
+const authMiddleware = require('../middleware/authMiddleware');
+
+router.get('/overview', authMiddleware, statsController.overview);
+
+module.exports = router;
+
+
+Public stats endpoint (requires auth) for the dashboard overview.
+
+utils/tokenUtils.js
+const jwt = require('jsonwebtoken');
+
+const generateToken = (user) => {
+  // Create JWT payload with user ID and active role
+  const payload = { id: user._id, activeRole: user.activeRole };
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
+};
+
+const verifyToken = (token) => {
+  return jwt.verify(token, process.env.JWT_SECRET);
+};
+
+module.exports = { generateToken, verifyToken };
+
+
+Utility functions for JWT handling: generating a token (1-day expiration) and verifying it.
+
+.env.example
+MONGO_URI=your_mongodb_connection_string
+JWT_SECRET=your_jwt_secret
+GOOGLE_CLIENT_ID=your_google_client_id
+PORT=5000
+NODE_ENV=development
+
+
+Example environment variables needed for configuration (MongoDB URI, JWT secret, Google OAuth client ID, etc.).
+
+This modular codebase provides a fully functional backend for RePlate, with JWT-based authentication, role-based access control, and clear separation of concerns. Each part uses async/await and contains comments for clarity. The AI matching logic is encapsulated in services/matcher.js and can be enhanced later. The structure is scalable and beginner-friendly, following best practices for a Node.js/Express/MongoDB application.
