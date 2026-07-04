@@ -20,6 +20,15 @@ const foodPostSchema = new mongoose.Schema({
     required: [true, 'Please provide a description'],
     trim: true
   },
+  // Photo URL from Cloudinary
+  photo: {
+    type: String,
+    default: ''
+  },
+  photoPublicId: {
+    type: String,
+    default: ''
+  },
   type: {
     type: String,
     required: [true, 'Please specify food type'],
@@ -56,10 +65,18 @@ const foodPostSchema = new mongoose.Schema({
       required: [true, 'Please provide an address']
     }
   },
+  // Donation lifecycle:
+  // available → claimed → collected → completed | expired
   status: {
     type: String,
-    enum: ['available', 'claimed', 'completed', 'expired'],
+    enum: ['available', 'claimed', 'collected', 'completed', 'expired'],
     default: 'available'
+  },
+  collectedAt: {
+    type: Date
+  },
+  completedAt: {
+    type: Date
   },
   claimedBy: {
     type: mongoose.Schema.Types.ObjectId,

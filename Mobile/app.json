@@ -1,0 +1,71 @@
+{
+  "expo": {
+    "name": "RePlate",
+    "slug": "replate",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F1117"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.replate.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "RePlate needs your location to show nearby food donations.",
+        "NSLocationAlwaysUsageDescription": "RePlate needs your location to notify you about nearby food donations.",
+        "NSCameraUsageDescription": "RePlate needs camera access to take photos of food donations.",
+        "NSPhotoLibraryUsageDescription": "RePlate needs photo library access to upload food donation photos."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundColor": "#0F1117"
+      },
+      "package": "com.replate.app",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#F97316",
+          "sounds": []
+        }
+      ],
+      "expo-location",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "RePlate needs access to your photos to upload food donation images."
+        }
+      ],
+      "@react-native-community/datetimepicker"
+    ],
+    "extra": {
+      "API_URL": "http://10.67.178.209:5000",
+      "eas": {
+        "projectId": "e611a097-d96a-4355-90ad-4f3bcbe5b8c7"
+      }
+    }
+  }
+}

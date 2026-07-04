@@ -68,8 +68,10 @@ const switchRole = async (req, res) => {
 
     const { role } = req.body;
 
-    // Validate requested role
-    if (!role || !['donor', 'recipient'].includes(role)) {
+    let targetRole = role;
+    if (!targetRole) {
+      targetRole = user.activeRole === 'donor' ? 'recipient' : 'donor';
+    } else if (!['donor', 'recipient'].includes(targetRole)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid role specified. Must be "donor" or "recipient"'
@@ -77,13 +79,13 @@ const switchRole = async (req, res) => {
     }
 
     // Check if user has the requested role
-    if (!user.roles.includes(role)) {
+    if (!user.roles.includes(targetRole)) {
       // Add the role if user doesn't have it
-      user.roles.push(role);
+      user.roles.push(targetRole);
     }
 
     // Set active role
-    user.activeRole = role;
+    user.activeRole = targetRole;
     await user.save();
 
     res.status(200).json({
@@ -93,7 +95,7 @@ const switchRole = async (req, res) => {
         activeRole: user.activeRole,
         roles: user.roles
       },
-      message: `Successfully switched to ${role} role`
+      message: `Successfully switched to ${targetRole} role`
     });
   } catch (error) {
     console.error(`Error in switchRole: ${error.message}`);

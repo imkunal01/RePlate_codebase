@@ -12,7 +12,7 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
  */
 const signup = async (req, res) => {
   try {
-    const { name, email, password, location, preferences } = req.body;
+    const { name, email, password, location, preferences, role } = req.body;
 
     // Check if user already exists
     const userExists = await User.findOne({ email });
@@ -23,13 +23,20 @@ const signup = async (req, res) => {
       });
     }
 
+    // Determine roles based on input
+    const activeRole = (role === 'donor' || role === 'recipient') ? role : 'recipient';
+    const roles = ['recipient'];
+    if (activeRole === 'donor') roles.push('donor');
+
     // Create new user
     const user = await User.create({
       name,
       email,
       password,
       location,
-      preferences
+      preferences,
+      activeRole,
+      roles
     });
 
     if (user) {
@@ -77,7 +84,7 @@ const signup = async (req, res) => {
  */
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, role } = req.body;
 
     // Check if user exists
     const user = await User.findOne({ email });
@@ -95,6 +102,15 @@ const login = async (req, res) => {
         success: false,
         message: 'Invalid email or password'
       });
+    }
+
+    // Update activeRole if role is provided and valid
+    if (role && ['donor', 'recipient'].includes(role) && user.activeRole !== role) {
+      user.activeRole = role;
+      if (!user.roles.includes(role)) {
+        user.roles.push(role);
+      }
+      await user.save();
     }
 
     // Generate JWT token

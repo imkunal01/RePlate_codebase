@@ -1,5 +1,11 @@
 const FoodPost = require('../models/foodModel');
 const Claim = require('../models/claimModel');
+const User = require('../models/userModel');
+const {
+  notifyNewDonation,
+  notifyDonationClaimed,
+  notifyDonationCompleted
+} = require('../services/notificationService');
 
 /**
  * @desc    Create a new food post
@@ -16,7 +22,9 @@ const createFoodPost = async (req, res) => {
       expiryTime,
       location,
       pickupInstructions,
-      dietaryInfo
+      dietaryInfo,
+      photo,
+      photoPublicId
     } = req.body;
 
     // Create new food post
@@ -29,8 +37,31 @@ const createFoodPost = async (req, res) => {
       expiryTime,
       location,
       pickupInstructions,
-      dietaryInfo
+      dietaryInfo,
+      photo: photo || '',
+      photoPublicId: photoPublicId || ''
     });
+
+    // Notify nearby NGOs (recipients within 10km) asynchronously
+    const [foodLon, foodLat] = foodPost.location.coordinates;
+    User.find({
+      roles: 'recipient',
+      isVerified: true,
+      fcmToken: { $ne: '' },
+      'location.coordinates': {
+        $near: {
+          $geometry: { type: 'Point', coordinates: [foodLon, foodLat] },
+          $maxDistance: 10000
+        }
+      }
+    })
+      .limit(50)
+      .then((nearbyNGOs) => {
+        if (nearbyNGOs.length > 0) {
+          notifyNewDonation(nearbyNGOs, foodPost);
+        }
+      })
+      .catch((err) => console.error('Error fetching nearby NGOs for notification:', err.message));
 
     res.status(201).json({
       success: true,
@@ -61,7 +92,7 @@ const getNearbyFoodPosts = async (req, res) => {
     // Find nearby food posts
     const foodPosts = await FoodPost.find({
       status: 'available',
-      'location.coordinates': {
+      location: {
         $near: {
           $geometry: {
             type: 'Point',
@@ -100,7 +131,7 @@ const claimFoodPost = async (req, res) => {
     const foodId = req.params.id;
 
     // Find the food post
-    const foodPost = await FoodPost.findById(foodId);
+    const foodPost = await FoodPost.findById(foodId).populate('donorId', 'name fcmToken');
 
     if (!foodPost) {
       return res.status(404).json({
@@ -128,6 +159,13 @@ const claimFoodPost = async (req, res) => {
     foodPost.status = 'claimed';
     foodPost.claimedBy = req.user._id;
     await foodPost.save();
+
+    // Notify the donor asynchronously
+    if (foodPost.donorId && foodPost.donorId.fcmToken) {
+      notifyDonationClaimed(foodPost.donorId.fcmToken, foodPost, req.user).catch((err) =>
+        console.error('Claim notification error:', err.message)
+      );
+    }
 
     res.status(200).json({
       success: true,
@@ -192,14 +230,16 @@ const updateFoodStatus = async (req, res) => {
     const { status } = req.body;
     
     // Validate status
-    if (!['available', 'claimed', 'completed', 'expired'].includes(status)) {
+    if (!['available', 'claimed', 'collected', 'completed', 'expired'].includes(status)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid status'
       });
     }
 
-    const foodPost = await FoodPost.findById(req.params.id);
+    const foodPost = await FoodPost.findById(req.params.id)
+      .populate('donorId', 'name fcmToken')
+      .populate('claimedBy', 'name fcmToken');
 
     if (!foodPost) {
       return res.status(404).json({
@@ -209,7 +249,7 @@ const updateFoodStatus = async (req, res) => {
     }
 
     // Check if user is the donor
-    if (foodPost.donorId.toString() !== req.user._id.toString()) {
+    if (foodPost.donorId._id.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to update this food post'
@@ -219,11 +259,23 @@ const updateFoodStatus = async (req, res) => {
     // Update status
     foodPost.status = status;
     
-    // If status is completed, update related claim
+    if (status === 'collected') {
+      foodPost.collectedAt = new Date();
+    }
+
+    // If status is completed, update related claim and send notifications
     if (status === 'completed' && foodPost.claimedBy) {
+      foodPost.completedAt = new Date();
       await Claim.findOneAndUpdate(
-        { foodId: foodPost._id, recipientId: foodPost.claimedBy },
-        { status: 'completed', completedAt: Date.now() }
+        { foodId: foodPost._id, recipientId: foodPost.claimedBy._id },
+        { status: 'completed', completedAt: new Date() }
+      );
+
+      // Notify both parties asynchronously
+      const donorToken = foodPost.donorId?.fcmToken;
+      const recipientToken = foodPost.claimedBy?.fcmToken;
+      notifyDonationCompleted(donorToken, recipientToken, foodPost).catch((err) =>
+        console.error('Completion notification error:', err.message)
       );
     }
 
@@ -275,7 +327,7 @@ const deleteFoodPost = async (req, res) => {
       });
     }
 
-    await foodPost.remove();
+    await FoodPost.findByIdAndDelete(req.params.id);
 
     res.status(200).json({
       success: true,
@@ -291,11 +343,44 @@ const deleteFoodPost = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get a single food post by ID
+ * @route   GET /api/food/:id
+ * @access  Private
+ */
+const getFoodPostById = async (req, res) => {
+  try {
+    const foodPost = await FoodPost.findById(req.params.id)
+      .populate('donorId', 'name orgName orgType profilePhoto')
+      .populate('claimedBy', 'name orgName');
+
+    if (!foodPost) {
+      return res.status(404).json({
+        success: false,
+        message: 'Food post not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: foodPost
+    });
+  } catch (error) {
+    console.error(`Error in getFoodPostById: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   createFoodPost,
   getNearbyFoodPosts,
   claimFoodPost,
   getUserFoodPosts,
   updateFoodStatus,
-  deleteFoodPost
+  deleteFoodPost,
+  getFoodPostById
 };

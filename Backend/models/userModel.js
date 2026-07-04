@@ -29,6 +29,26 @@ const userSchema = new mongoose.Schema({
   googleId: {
     type: String
   },
+  // ─── Organization info ───────────────────────────────────────────
+  phone: {
+    type: String,
+    trim: true
+  },
+  orgName: {
+    type: String,
+    trim: true
+  },
+  orgType: {
+    type: String,
+    enum: ['restaurant', 'hotel', 'bakery', 'hostel', 'caterer', 'event_organizer', 'grocery', 'ngo', 'community_kitchen', 'orphanage', 'old_age_home', 'food_bank', 'disaster_relief', 'household', 'other'],
+    default: 'other'
+  },
+  profilePhoto: {
+    type: String,
+    default: ''
+  },
+
+  // ─── Auth & roles ─────────────────────────────────────────────────
   roles: {
     type: [String],
     enum: ['donor', 'recipient', 'admin'],
@@ -68,6 +88,35 @@ const userSchema = new mongoose.Schema({
       default: 10 // in kilometers
     }
   },
+  // ─── FCM / Push notifications ─────────────────────────────────────
+  fcmToken: {
+    type: String,
+    default: ''
+  },
+
+  // ─── NGO Verification ─────────────────────────────────────────────
+  // isVerified: true means the NGO has been approved by an admin
+  isVerified: {
+    type: Boolean,
+    default: false
+  },
+  // verificationStatus: 'none' (default) | 'pending' | 'approved' | 'rejected'
+  verificationStatus: {
+    type: String,
+    enum: ['none', 'pending', 'approved', 'rejected'],
+    default: 'none'
+  },
+  verifiedAt: {
+    type: Date
+  },
+  verifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  rejectionReason: {
+    type: String
+  },
+
   createdAt: {
     type: Date,
     default: Date.now
