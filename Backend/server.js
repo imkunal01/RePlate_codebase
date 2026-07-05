@@ -66,6 +66,7 @@ app.use('/api/ai', require('./routes/aiRoutes'));
 app.use('/api/stats', require('./routes/statsRoutes'));
 app.use('/api/upload', require('./routes/uploadRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api/ratings', require('./routes/ratingRoutes'));
 
 // ─── FCM Token Registration ──────────────────────────────────────────────────
 // Lightweight endpoint to save/update the user's FCM device token

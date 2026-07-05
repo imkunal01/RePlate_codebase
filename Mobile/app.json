@@ -62,7 +62,7 @@
       "@react-native-community/datetimepicker"
     ],
     "extra": {
-      "API_URL": "http://10.67.178.209:5000",
+      "API_URL": "https://replate-codebase.onrender.com",
       "eas": {
         "projectId": "e611a097-d96a-4355-90ad-4f3bcbe5b8c7"
       }

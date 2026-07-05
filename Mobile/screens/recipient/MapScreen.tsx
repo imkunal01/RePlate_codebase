@@ -1,25 +1,32 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  FlatList,
-  RefreshControl,
   ActivityIndicator,
-  Linking,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
+import MapView, { Marker, Callout, PROVIDER_GOOGLE, PROVIDER_DEFAULT } from 'react-native-maps';
+import Constants from 'expo-constants';
 import { foodService } from '../../services/foodService';
 import { useLocationStore } from '../../store/locationStore';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
-import DonationCard from '../../components/DonationCard';
-import EmptyState from '../../components/EmptyState';
+import { MAP_CONFIG } from '../../constants/api';
+
+// Check if Android Google Maps API Key is configured in app.json
+// If it's missing, rendering MapView on Android will cause a fatal native crash.
+const hasAndroidMapKey = !!Constants.expoConfig?.android?.config?.googleMaps?.apiKey;
+const canRenderMap = Platform.OS !== 'android' || hasAndroidMapKey;
 
 export default function MapScreen({ navigation }: any) {
+  const mapRef = useRef<MapView>(null);
   const { coordinates, address, getCurrentLocation, isLoading: locationLoading } = useLocationStore();
+  const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState(!canRenderMap);
 
   useEffect(() => {
     if (!coordinates) {
@@ -27,7 +34,7 @@ export default function MapScreen({ navigation }: any) {
     }
   }, []);
 
-  const { data: donations = [], isLoading, refetch, isRefetching } = useQuery({
+  const { data: donations = [], isLoading, refetch } = useQuery({
     queryKey: ['nearbyFood', coordinates?.latitude, coordinates?.longitude],
     queryFn: () =>
       coordinates
@@ -37,229 +44,364 @@ export default function MapScreen({ navigation }: any) {
     refetchInterval: 60 * 1000,
   });
 
-  const openInMaps = () => {
-    if (!coordinates) return;
-    const url = `https://maps.google.com/?q=${coordinates.latitude},${coordinates.longitude}`;
-    Linking.openURL(url);
+  // Center map when coordinates are available
+  useEffect(() => {
+    if (coordinates && mapRef.current && mapReady) {
+      mapRef.current.animateToRegion({
+        latitude: coordinates.latitude,
+        longitude: coordinates.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
+    }
+  }, [coordinates, mapReady]);
+
+  const handleMarkerPress = (donationId: string) => {
+    navigation.navigate('DonationDetail', { donationId });
   };
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <SafeAreaView style={styles.header}>
-        <View style={styles.headerTop}>
-          <View>
-            <Text style={styles.title}>Nearby Food</Text>
-            <Text style={styles.subtitle}>
-              {isLoading
-                ? 'Finding donations…'
-                : coordinates
-                ? `${donations.length} available within 10km`
-                : 'Enable location to find food'}
+      {/* Map Background */}
+      <View style={StyleSheet.absoluteFill}>
+        {mapError ? (
+          <View style={styles.errorContainer}>
+            <Ionicons name="map-outline" size={48} color={Colors.textMuted} />
+            <Text style={styles.errorTitle}>Map Unavailable</Text>
+            <Text style={styles.errorDesc}>
+              Google Maps API key is missing from app.json configuration. Please configure it to view the map.
             </Text>
           </View>
-          <TouchableOpacity style={styles.refreshBtn} onPress={() => refetch()}>
-            <Ionicons name="refresh" size={18} color={Colors.primary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Location bar */}
-        {coordinates ? (
-          <TouchableOpacity style={styles.locationBar} onPress={openInMaps}>
-            <Ionicons name="location" size={16} color={Colors.primary} />
-            <Text style={styles.locationText} numberOfLines={1}>
-              {address || `${coordinates.latitude.toFixed(4)}, ${coordinates.longitude.toFixed(4)}`}
-            </Text>
-            <Ionicons name="open-outline" size={14} color={Colors.textMuted} />
-          </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={styles.locationBar} onPress={getCurrentLocation}>
-            <Ionicons name="location-outline" size={16} color={Colors.textMuted} />
-            <Text style={[styles.locationText, { color: Colors.textMuted }]}>
-              {locationLoading ? 'Getting location…' : 'Tap to enable location'}
-            </Text>
-            {locationLoading && <ActivityIndicator size="small" color={Colors.primary} />}
-          </TouchableOpacity>
+        <MapView
+          ref={mapRef}
+          style={StyleSheet.absoluteFill}
+          provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : PROVIDER_DEFAULT}
+          initialRegion={MAP_CONFIG.initialRegion}
+          showsUserLocation={!!coordinates}
+          showsMyLocationButton={false}
+          onMapReady={() => setMapReady(true)}
+          customMapStyle={mapStyle}
+        >
+          {donations.map((donation: any) => (
+            <Marker
+              key={donation._id}
+              coordinate={{
+                latitude: donation.location.coordinates[1],
+                longitude: donation.location.coordinates[0],
+              }}
+              title={donation.name}
+              description={`${donation.quantity.amount} ${donation.quantity.unit}`}
+              pinColor={MAP_CONFIG.donationPinColor}
+              onCalloutPress={() => handleMarkerPress(donation._id)}
+            >
+              <Callout tooltip>
+                <View style={styles.calloutContainer}>
+                  <Text style={styles.calloutTitle}>{donation.name}</Text>
+                  <Text style={styles.calloutDesc}>
+                    {donation.quantity.amount} {donation.quantity.unit} • {donation.type}
+                  </Text>
+                  <Text style={styles.calloutAction}>Tap for details</Text>
+                </View>
+              </Callout>
+            </Marker>
+          ))}
+        </MapView>
         )}
+      </View>
 
-        {/* Dev info banner */}
-        <View style={styles.infoBanner}>
-          <Ionicons name="map-outline" size={14} color={Colors.info} />
-          <Text style={styles.infoText}>
-            Interactive map available in development build
-          </Text>
+      {/* Floating Header */}
+      <SafeAreaView style={styles.headerContainer} pointerEvents="box-none">
+        <View style={styles.header}>
+          <View style={styles.headerTop}>
+            <View style={styles.headerTextContainer}>
+              <Text style={styles.title}>Nearby Food</Text>
+              <Text style={styles.subtitle}>
+                {isLoading
+                  ? 'Finding donations…'
+                  : coordinates
+                  ? `${donations.length} available within 10km`
+                  : 'Enable location to find food'}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.refreshBtn} onPress={() => refetch()}>
+              {isLoading ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <Ionicons name="refresh" size={20} color={Colors.primary} />
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Location Bar */}
+          <TouchableOpacity 
+            style={styles.locationBar} 
+            onPress={getCurrentLocation}
+            disabled={locationLoading}
+          >
+            <Ionicons 
+              name={coordinates ? "location" : "location-outline"} 
+              size={16} 
+              color={coordinates ? Colors.primary : Colors.textMuted} 
+            />
+            <Text style={[styles.locationText, !coordinates && { color: Colors.textMuted }]} numberOfLines={1}>
+              {locationLoading 
+                ? 'Getting location…' 
+                : address || (coordinates 
+                    ? `${coordinates.latitude.toFixed(4)}, ${coordinates.longitude.toFixed(4)}`
+                    : 'Tap to enable location')}
+            </Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
 
-      {/* Content */}
-      {!coordinates ? (
-        <View style={styles.locationPrompt}>
-          <View style={styles.locationIconBg}>
-            <Ionicons name="location-outline" size={48} color={Colors.primary} />
-          </View>
-          <Text style={styles.promptTitle}>Location Required</Text>
-          <Text style={styles.promptSub}>
-            Allow location access to discover food donations near you
-          </Text>
-          <TouchableOpacity style={styles.enableBtn} onPress={getCurrentLocation}>
-            <Ionicons name="navigate" size={18} color={Colors.white} />
-            <Text style={styles.enableBtnText}>Enable Location</Text>
-          </TouchableOpacity>
-        </View>
-      ) : isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.loadingText}>Searching nearby donations…</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={donations}
-          keyExtractor={(item: any) => item._id}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefetching}
-              onRefresh={refetch}
-              tintColor={Colors.primary}
-            />
-          }
-          ListEmptyComponent={
-            <EmptyState
-              icon="restaurant-outline"
-              title="No food nearby right now"
-              subtitle="Pull down to refresh or check back soon — donors in your area will appear here."
-            />
-          }
-          renderItem={({ item }: any) => (
-            <DonationCard
-              donation={item}
-              onPress={() =>
-                navigation.navigate('DonationDetail', { donationId: item._id })
-              }
-              showStatusActions={false}
-            />
-          )}
-        />
-      )}
+      {/* Bottom Floating Locate Button */}
+      <SafeAreaView style={styles.fabContainer} pointerEvents="box-none">
+        <TouchableOpacity 
+          style={styles.fab} 
+          onPress={() => {
+            if (coordinates && mapRef.current) {
+              mapRef.current.animateToRegion({
+                latitude: coordinates.latitude,
+                longitude: coordinates.longitude,
+                latitudeDelta: 0.05,
+                longitudeDelta: 0.05,
+              });
+            } else {
+              getCurrentLocation();
+            }
+          }}
+        >
+          <Ionicons name="locate" size={24} color={Colors.white} />
+        </TouchableOpacity>
+      </SafeAreaView>
     </View>
   );
 }
 
+// Optional: Minimal dark theme map style to match the app
+const mapStyle = [
+  {
+    "elementType": "geometry",
+    "stylers": [{"color": "#212121"}]
+  },
+  {
+    "elementType": "labels.icon",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#757575"}]
+  },
+  {
+    "elementType": "labels.text.stroke",
+    "stylers": [{"color": "#212121"}]
+  },
+  {
+    "featureType": "administrative",
+    "elementType": "geometry",
+    "stylers": [{"color": "#757575"}]
+  },
+  {
+    "featureType": "administrative.country",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#9e9e9e"}]
+  },
+  {
+    "featureType": "administrative.land_parcel",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "administrative.locality",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#bdbdbd"}]
+  },
+  {
+    "featureType": "poi",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#757575"}]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "geometry",
+    "stylers": [{"color": "#181818"}]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#616161"}]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "labels.text.stroke",
+    "stylers": [{"color": "#1b1b1b"}]
+  },
+  {
+    "featureType": "road",
+    "elementType": "geometry.fill",
+    "stylers": [{"color": "#2c2c2c"}]
+  },
+  {
+    "featureType": "road",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#8a8a8a"}]
+  },
+  {
+    "featureType": "road.arterial",
+    "elementType": "geometry",
+    "stylers": [{"color": "#373737"}]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "geometry",
+    "stylers": [{"color": "#3c3c3c"}]
+  },
+  {
+    "featureType": "road.highway.controlled_access",
+    "elementType": "geometry",
+    "stylers": [{"color": "#4e4e4e"}]
+  },
+  {
+    "featureType": "road.local",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#616161"}]
+  },
+  {
+    "featureType": "transit",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#757575"}]
+  },
+  {
+    "featureType": "water",
+    "elementType": "geometry",
+    "stylers": [{"color": "#000000"}]
+  },
+  {
+    "featureType": "water",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#3d3d3d"}]
+  }
+];
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
+  container: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  headerContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+  },
   header: {
-    backgroundColor: Colors.surface,
-    paddingHorizontal: Spacing.xl,
-    paddingBottom: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    gap: Spacing.sm,
+    marginHorizontal: Spacing.xl,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: BorderRadius.xl,
+    padding: Spacing.lg,
+    ...Shadow.md,
   },
   headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: Spacing.sm,
+    marginBottom: Spacing.md,
   },
-  title: { fontSize: FontSize.xxl, fontWeight: '800', color: Colors.text },
-  subtitle: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
+  headerTextContainer: {
+    flex: 1,
+  },
+  title: {
+    fontSize: FontSize.xl,
+    fontWeight: '800',
+    color: Colors.text,
+  },
+  subtitle: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
   refreshBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: `${Colors.primary}20`,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: `${Colors.primary}15`,
     alignItems: 'center',
     justifyContent: 'center',
   },
   locationBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.surfaceElevated,
+    backgroundColor: Colors.surface,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    gap: Spacing.sm,
   },
   locationText: {
     flex: 1,
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
     color: Colors.text,
     fontWeight: '500',
   },
-  infoBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: `${Colors.info}10`,
-    borderRadius: BorderRadius.sm,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: `${Colors.info}25`,
+  fabContainer: {
+    position: 'absolute',
+    bottom: Spacing.xl,
+    right: Spacing.xl,
+    zIndex: 10,
   },
-  infoText: {
-    fontSize: FontSize.xs - 1,
-    color: Colors.info,
-    flex: 1,
-  },
-  locationPrompt: {
-    flex: 1,
+  fab: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: Spacing.xxxl,
-    gap: Spacing.lg,
+    ...Shadow.lg,
   },
-  locationIconBg: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: `${Colors.primary}15`,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: `${Colors.primary}30`,
+  calloutContainer: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    width: 200,
+    ...Shadow.sm,
   },
-  promptTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: '800',
+  calloutTitle: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
     color: Colors.text,
+    marginBottom: 4,
+  },
+  calloutDesc: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginBottom: 8,
+  },
+  calloutAction: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.primary,
     textAlign: 'center',
   },
-  promptSub: {
-    fontSize: FontSize.md,
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.xl,
+    backgroundColor: Colors.surface,
+  },
+  errorTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: Colors.text,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  errorDesc: {
+    fontSize: FontSize.sm,
     color: Colors.textSecondary,
     textAlign: 'center',
-    lineHeight: 22,
-  },
-  enableBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.xxxl,
-    paddingVertical: Spacing.md,
-    gap: Spacing.sm,
-    marginTop: Spacing.sm,
-    ...Shadow.primary,
-  },
-  enableBtnText: {
-    color: Colors.white,
-    fontWeight: '700',
-    fontSize: FontSize.md,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.md,
-  },
-  loadingText: { color: Colors.textSecondary, fontSize: FontSize.md },
-  list: {
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xxxl,
+    lineHeight: 20,
   },
 });

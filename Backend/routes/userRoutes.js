@@ -1,5 +1,5 @@
 const express = require('express');
-const { updateProfile, switchRole, getUsers, deleteAccount } = require('../controllers/userController');
+const { updateProfile, switchRole, getUsers, deleteAccount, verifyNGO } = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
 const { checkRole } = require('../middleware/roleMiddleware');
 
@@ -12,5 +12,6 @@ router.delete('/profile', protect, deleteAccount);
 
 // Admin routes
 router.get('/', protect, checkRole('admin'), getUsers);
+router.patch('/:id/verify', protect, checkRole('admin'), verifyNGO);
 
 module.exports = router;

@@ -163,9 +163,66 @@ const deleteAccount = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Verify an NGO (admin only)
+ * @route   PATCH /api/users/:id/verify
+ * @access  Private/Admin
+ */
+const verifyNGO = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const { status, reason } = req.body;
+    
+    if (!['approved', 'rejected', 'none', 'pending'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid verification status'
+      });
+    }
+
+    user.verificationStatus = status;
+    user.isVerified = status === 'approved';
+    user.verifiedBy = req.user._id;
+    user.verifiedAt = new Date();
+    
+    if (status === 'rejected' && reason) {
+      user.rejectionReason = reason;
+    }
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        _id: user._id,
+        name: user.name,
+        verificationStatus: user.verificationStatus,
+        isVerified: user.isVerified
+      },
+      message: `User verification status updated to ${status}`
+    });
+  } catch (error) {
+    console.error(`Error in verifyNGO: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   updateProfile,
   switchRole,
   getUsers,
-  deleteAccount
+  deleteAccount,
+  verifyNGO
 };

@@ -148,6 +148,14 @@ const claimFoodPost = async (req, res) => {
       });
     }
 
+    // Check if recipient is verified
+    if (!req.user.isVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account must be verified by an admin before you can claim food.'
+      });
+    }
+
     // Create a claim
     const claim = await Claim.create({
       foodId,

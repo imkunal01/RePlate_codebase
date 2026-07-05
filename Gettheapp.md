@@ -1,0 +1,1 @@
+Invoke-WebRequest -Uri "https://expo.dev/artifacts/eas/JlcCFkdJE9pk7O8zMbMV-NPrE5Xfdf6eV0oWTde3-YQ.apk" -OutFile "$env:USERPROFILE\Desktop\RePlate.apk"
